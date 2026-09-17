@@ -1,0 +1,156 @@
+openapi: 3.0.0
+info:
+  title: Fractal Scaling API
+  version: 0.1.0
+  description: |
+    Progressive, reversible scaler for finite vector data.
+    POST /scale returns deterministic progressive selection indices for a 2D point set
+    at a given scale value in [0, 1]. Pay-per-request via x402 USDC on Base.
+
+    **Payment**: Include X-PAYMENT or PAYMENT-SIGNATURE header with a valid x402 v2 payment
+    (0.02 USDC on Base / eip155:8453). Without payment, the server returns HTTP 402.
+
+paths:
+  /scale:
+    post:
+      summary: Scale — Progressive fractal selection (paid: 0.02 USDC)
+      operationId: scale
+      tags:
+        - Core
+      description: |
+        Returns a deterministic progressive selection of input point indices for the given
+        scale value. Increasing scale always returns a superset of the previous result.
+        Charged at 0.02 USDC per successful request via x402.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - points
+                - value
+              properties:
+                points:
+                  type: array
+                  items:
+                    type: array
+                    items:
+                      type: number
+                  description: "2D array of data points [n, dimensions]. Non-empty, all values finite."
+                  example: [[0.0, 0.0], [1.0, 0.0], [0.5, 0.866], [0.5, 0.289]]
+                value:
+                  type: number
+                  minimum: 0.0
+                  maximum: 1.0
+                  description: "Scale value in [0, 1]. 0 selects 0 points, 1 selects all n points."
+                  example: 0.5
+                weights:
+                  type: array
+                  items:
+                    type: number
+                  nullable: true
+                  description: "Optional per-point weights (non-negative floats, length must equal n)."
+                weight_floor:
+                  type: number
+                  default: 0.15
+                  description: "Minimum weight modifier, in (0, 1]."
+                beta:
+                  type: number
+                  default: 1.0
+                  description: "Weight exponent (non-negative)."
+      responses:
+        '200':
+          description: Successful scale operation
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  selected_indices:
+                    type: array
+                    items:
+                      type: integer
+                    description: "Indices into the input points array, in progressive selection order."
+                  stats:
+                    type: object
+                    properties:
+                      scale:
+                        type: number
+                      selected:
+                        type: integer
+                      total:
+                        type: integer
+                      reuse_from_previous:
+                        type: number
+                      mean_coverage_distance:
+                        type: number
+                      weighted_mean_coverage_distance:
+                        type: number
+                      max_coverage_distance:
+                        type: number
+        '402':
+          description: "Payment Required — include X-PAYMENT or PAYMENT-SIGNATURE header"
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentRequired'
+        '422':
+          description: "Validation error (invalid points array, out-of-range value, etc.)"
+
+  /health:
+    get:
+      summary: Health check (free)
+      operationId: health
+      tags:
+        - Ops
+      responses:
+        '200':
+          description: Service health status
+
+  /.well-known/x402.json:
+    get:
+      summary: x402 endpoint discovery (free)
+      operationId: x402_discovery
+      tags:
+        - Ops
+      responses:
+        '200':
+          description: x402 payment endpoint metadata
+
+components:
+  schemas:
+    PaymentRequired:
+      type: object
+      properties:
+        x402Version:
+          type: integer
+          example: 2
+        error:
+          type: string
+          example: "Payment required"
+        resource:
+          type: object
+        accepts:
+          type: array
+          items:
+            type: object
+            properties:
+              scheme:
+                type: string
+                example: "exact"
+              network:
+                type: string
+                example: "eip155:8453"
+              amount:
+                type: string
+                example: "20000"
+              asset:
+                type: string
+                example: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+              payTo:
+                type: string
+                example: "0x60c402878EfcEcAe5733A88075328Aa2320C39BE"
+              maxTimeoutSeconds:
+                type: integer
+                example: 300

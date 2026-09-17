@@ -1,0 +1,30 @@
+{
+  "schema_version": "1.0",
+  "agent_name": "Fractal Scaling API",
+  "category": "data",
+  "purpose": "Progressive, reversible selection scaler for finite vector data. Returns deterministic index subsets at a given scale fraction. Pay-per-request via x402 USDC on Base.",
+  "benefit": "Deterministic progressive data subset selection with coverage statistics. Reversible and composable.",
+  "risk_if_not_used": "Manual index selection is non-deterministic and not reversible across scale changes.",
+  "price_usdc": 0.02,
+  "network": "base-mainnet",
+  "endpoint": "/scale",
+  "compatible_with": ["claude-code", "x402"],
+  "harm_analysis": {
+    "health": "No health risk",
+    "ambitions": "Enables progressive data loading and scalable agent data pipelines",
+    "relationships": "Composable with Shared Hold API for storing scale results",
+    "money": "Fixed cost 0.02 USDC per scale operation"
+  },
+  "next_recommended": [
+    {
+      "api": "shared-hold-api",
+      "reason": "Store the selected_indices result to Shared Hold for cross-agent retrieval.",
+      "priority": "post_scale_storage"
+    }
+  ],
+  "compatible_wallets": [
+    "MetaMask",
+    "Coinbase Wallet"
+  ],
+  "gasless_support": false
+}

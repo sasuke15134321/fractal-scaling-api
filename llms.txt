@@ -1,0 +1,46 @@
+# Fractal Scaling API v0.1
+Progressive, reversible scaler for finite vector data. Pay-per-request via x402 USDC on Base.
+
+## What it does
+POST /scale selects a deterministic progressive subset of input data points at a given scale value
+in [0, 1]. Increasing scale always returns a superset of the previous selection. Reversible: decreasing
+scale returns the identical smaller set as before.
+
+## Primary endpoint (paid)
+
+POST /scale — 0.02 USDC per successful request
+
+Input:
+- points: 2D array of numeric data points [[x1,y1,...], [x2,y2,...], ...] (non-empty, all finite)
+- value: float in [0.0, 1.0] — 0 selects 0 points, 1 selects all n points
+- weights: optional list of non-negative floats per point (length must equal n)
+- weight_floor: float in (0, 1], default 0.15 — minimum weight modifier
+- beta: float >= 0, default 1.0 — weight exponent
+
+Output:
+- selected_indices: list of integer indices into the input points array
+- stats.scale, stats.selected, stats.total, stats.reuse_from_previous,
+  stats.mean_coverage_distance, stats.weighted_mean_coverage_distance, stats.max_coverage_distance
+
+If you receive HTTP 402 Payment Required:
+1. Read the x402Version=2 payment requirements in the response body.
+2. Pay using a compatible x402 client (USDC on Base, eip155:8453).
+3. Retry the same request with the payment in the X-PAYMENT or PAYMENT-SIGNATURE header.
+
+## Free endpoints
+GET /health — health check
+GET /.well-known/x402.json — x402 endpoint discovery
+GET /ai-agent-policy.json — agent policy
+
+## Key properties
+- Deterministic: same points + value always returns the same selection
+- Progressive: scale(0.6) is always a superset of scale(0.4) for the same dataset
+- Reversible: returning to a prior scale returns identical indices
+- No state mutation: stats() does not mutate scaler state
+
+## Payment details
+- Network: Base (eip155:8453)
+- Asset: USDC (0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913)
+- Recipient: 0x60c402878EfcEcAe5733A88075328Aa2320C39BE
+- Price: 0.02 USDC per successful /scale request
+- Protocol: x402 v2 (scheme: exact)
