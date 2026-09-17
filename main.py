@@ -7,7 +7,7 @@ Progressive, reversible scaler for finite vector data. Pay-per-request via x402.
 import os, sys, json, base64
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, str(Path(__file__).parent))
 
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
