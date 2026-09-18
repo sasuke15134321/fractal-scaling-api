@@ -262,6 +262,48 @@ async def openapi_yaml_endpoint():
     )
 
 
+@app.get("/.well-known/mcp/server-card.json", include_in_schema=False)
+async def mcp_server_card():
+    return {
+        "serverInfo": {"name": "fractal-scaling-api", "version": "0.1.0"},
+        "tools": [
+            {
+                "name": "scale",
+                "description": "Progressive fractal selection of input point indices (0.02 USDC). Returns deterministic progressive index subset and coverage stats.",
+                "inputSchema": {
+                    "type": "object",
+                    "required": ["points", "value"],
+                    "properties": {
+                        "points": {
+                            "type": "array",
+                            "items": {"type": "array", "items": {"type": "number"}},
+                            "description": "2D array of data points [[x, y, ...], ...]",
+                        },
+                        "value": {"type": "number", "description": "Scale fraction in [0, 1]"},
+                        "weights": {
+                            "type": "array",
+                            "items": {"type": "number"},
+                            "description": "Optional per-point weights (non-negative)",
+                        },
+                        "weight_floor": {"type": "number", "default": 0.15},
+                        "beta": {"type": "number", "default": 1.0},
+                    },
+                },
+            }
+        ],
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+
+
+# ── MCP Server mount (Smithery registration at /mcp) ──────────────────────────
+from mcp_server import mcp as _mcp_server  # noqa: E402
+
+try:
+    app.mount("/mcp", _mcp_server.streamable_http_app())
+except Exception as _mcp_err:
+    import logging
+    logging.getLogger(__name__).warning(f"MCP mount failed: {_mcp_err}")
