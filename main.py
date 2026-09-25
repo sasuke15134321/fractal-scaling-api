@@ -15,9 +15,18 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel, Field
 from typing import List, Optional
 import numpy as np
+from contextlib import asynccontextmanager
 
-from payment_verifier import PaymentVerifier
+from payment_verifier import _generate_cdp_jwt
 from fractal_scaling import FractalScaler, ScaleStats
+
+from x402 import x402ResourceServer
+from x402.http.middleware.fastapi import payment_middleware
+from x402.http.types import RouteConfig, PaymentOption
+from x402.http.facilitator_client import HTTPFacilitatorClient
+from x402.http.facilitator_client_base import FacilitatorConfig, CreateHeadersAuthProvider
+from x402.mechanisms.evm.exact.register import register_exact_evm_server
+from x402.extensions.bazaar import declare_discovery_extension, OutputConfig
 
 WALLET_ADDRESS = os.getenv("WALLET_ADDRESS", "0x60c402878EfcEcAe5733A88075328Aa2320C39BE")
 PRICE_USDC = os.getenv("PRICE_USDC", "0.02")
@@ -25,6 +34,105 @@ TEST_MODE = os.getenv("TEST_MODE", "false").lower() == "true"
 
 _NETWORK = "eip155:8453"
 _USDC_ADDRESS = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+
+_CDP_BASE_URL = "https://api.cdp.coinbase.com/platform/v2/x402"
+
+
+def _create_cdp_headers():
+    return {
+        "supported": {
+            "Authorization": "Bearer " + _generate_cdp_jwt(
+                "GET", "/platform/v2/x402/supported"
+            )
+        },
+        "verify": {
+            "Authorization": "Bearer " + _generate_cdp_jwt(
+                "POST", "/platform/v2/x402/verify"
+            )
+        },
+        "settle": {
+            "Authorization": "Bearer " + _generate_cdp_jwt(
+                "POST", "/platform/v2/x402/settle"
+            )
+        },
+    }
+
+
+_cdp_auth = CreateHeadersAuthProvider(_create_cdp_headers)
+
+_facilitator = HTTPFacilitatorClient(
+    FacilitatorConfig(
+        url=_CDP_BASE_URL,
+        auth_provider=_cdp_auth,
+    )
+)
+
+_x402_server = x402ResourceServer(_facilitator)
+register_exact_evm_server(_x402_server, _NETWORK)
+
+_bazaar_extension = declare_discovery_extension(
+    input={
+        "points": [
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [0.5, 0.866],
+            [0.5, 0.289],
+        ],
+        "value": 0.5,
+    },
+    body_type="json",
+    output=OutputConfig(
+        example={
+            "selected_indices": [3, 0],
+            "stats": {
+                "scale": 0.5,
+                "selected": 2,
+                "total": 4,
+                "reuse_from_previous": 1.0,
+                "mean_coverage_distance": 0.289,
+                "weighted_mean_coverage_distance": 0.289,
+                "max_coverage_distance": 0.578,
+            },
+        },
+        schema={
+            "type": "object",
+            "properties": {
+                "selected_indices": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                },
+                "stats": {"type": "object"},
+            },
+        },
+    ),
+)
+
+_x402_routes = {
+    "POST /scale": RouteConfig(
+        accepts=PaymentOption(
+            scheme="exact",
+            pay_to=WALLET_ADDRESS,
+            price="$" + PRICE_USDC,
+            network=_NETWORK,
+            max_timeout_seconds=300,
+        ),
+        description="Fractal scale operation - 0.02 USDC per successful request",
+        mime_type="application/json",
+        extensions=_bazaar_extension,
+    )
+}
+
+_mcp_server = None  # populated at bottom of file; lifespan sees final value at startup
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    if _mcp_server is not None:
+        async with _mcp_server.session_manager.run():
+            yield
+    else:
+        yield
+
 
 app = FastAPI(
     title="Fractal Scaling API",
@@ -34,6 +142,7 @@ app = FastAPI(
         "POST /scale returns deterministic progressive selection indices for a 2D point set "
         "at a given scale value in [0, 1]. Pay-per-request via x402 USDC on Base."
     ),
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -44,69 +153,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-payment_verifier = PaymentVerifier()
 
+@app.middleware("http")
+async def x402_middleware(request: Request, call_next):
+    if TEST_MODE:
+        return await call_next(request)
+    return await payment_middleware(
+        _x402_routes,
+        _x402_server,
+    )(request, call_next)
 
-def _payment_required_body(method: str, url: str) -> dict:
-    amount_units = str(round(float(PRICE_USDC) * 1_000_000))
-    return {
-        "x402Version": 2,
-        "error": "Payment required",
-        "resource": {
-            "url": url,
-            "method": method,
-            "description": "Fractal scale operation — 0.02 USDC per successful request",
-            "mimeType": "application/json",
-        },
-        "accepts": [{
-            "scheme": "exact",
-            "network": _NETWORK,
-            "amount": amount_units,
-            "asset": _USDC_ADDRESS,
-            "payTo": WALLET_ADDRESS,
-            "maxTimeoutSeconds": 300,
-            "extra": {"name": "USD Coin", "version": "2"},
-            "resource": {"method": method, "mimeType": "application/json"},
-        }],
-        "extensions": {
-            "bazaar": {
-                "discoverable": True,
-                "info": {
-                    "input": {
-                        "type": "http",
-                        "method": "POST",
-                        "bodyType": "json",
-                        "body": {
-                            "points": [[0.0, 0.0], [1.0, 0.0], [0.5, 0.866], [0.5, 0.289]],
-                            "value": 0.5,
-                        },
-                    },
-                    "output": {
-                        "type": "json",
-                        "example": {
-                            "selected_indices": [3, 0],
-                            "stats": {
-                                "scale": 0.5,
-                                "selected": 2,
-                                "total": 4,
-                                "reuse_from_previous": 1.0,
-                                "mean_coverage_distance": 0.289,
-                                "weighted_mean_coverage_distance": 0.289,
-                                "max_coverage_distance": 0.578,
-                            },
-                        },
-                    },
-                },
-                "schema": {
-                    "type": "object",
-                    "properties": {
-                        "selected_indices": {"type": "array"},
-                        "stats": {"type": "object"},
-                    },
-                },
-            }
-        },
-    }
 
 
 class ScaleRequest(BaseModel):
@@ -146,20 +202,6 @@ class ScaleResponse(BaseModel):
     tags=["Core"],
 )
 async def scale(payload: ScaleRequest, request: Request):
-    if not TEST_MODE:
-        payment_header = (
-            request.headers.get("PAYMENT-SIGNATURE") or request.headers.get("X-PAYMENT")
-        )
-        if not payment_header:
-            body = _payment_required_body("POST", str(request.url))
-            return JSONResponse(
-                status_code=402,
-                content=body,
-                headers={"Payment-Required": base64.b64encode(json.dumps(body).encode()).decode()},
-            )
-        is_valid = await payment_verifier.verify_payment(payment_header, WALLET_ADDRESS, PRICE_USDC)
-        if not is_valid:
-            raise HTTPException(status_code=402, detail="Payment verification failed")
 
     try:
         pts = np.array(payload.points, dtype=float)
